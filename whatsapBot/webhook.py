@@ -6,6 +6,7 @@ import os
 
 router = APIRouter()
 
+
 @router.post("/webhook")
 async def receive_whatsapp_message(request: Request):
     form = await request.form()
@@ -20,10 +21,18 @@ async def receive_whatsapp_message(request: Request):
         )
         result = response.json()
 
+    # If new user, send welcome message first
+    if "chat_link" in result:
+        send_whatsapp_message(phone,
+            "👋 Hello! Welcome to Seek!\n\nSeek was created by 5 cracked developers to help you with all your health, food and drug questions. I'm your personal health assistant and I'm here to help! 💊🥗"
+        )
+
+    # Send the actual answer
     send_whatsapp_message(phone, result["answer"])
 
+    # Send chat link for new users
     if "chat_link" in result:
-        send_whatsapp_message(phone, f"View your chat history: {result['chat_link']}")
+        send_whatsapp_message(phone, f"🔗 View your chat history here: {result['chat_link']}")
 
     return PlainTextResponse("ok")
 
