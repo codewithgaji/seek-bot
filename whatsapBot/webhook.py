@@ -14,7 +14,10 @@ async def receive_whatsapp_message(request: Request):
     phone = form.get("From").replace("whatsapp:", "")
     text = form.get("Body")
 
-    async with httpx.AsyncClient() as client:
+    # Send instant acknowledgement
+    send_whatsapp_message(phone, "🔍 Looking that up for you...")
+
+    async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
             f"{os.getenv('APP_URL')}/message",
             json={"phone": phone, "message": text}
@@ -34,10 +37,14 @@ async def receive_whatsapp_message(request: Request):
     return PlainTextResponse("ok")
 
 
-def send_whatsapp_message(to: str, text: str):
+def send_whatsapp_message(to: str, body: str):
     client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-    client.messages.create(
-        from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
-        to=f"whatsapp:{to}",
-        body=text
-    )
+
+    chunks = [body[i:i+1500] for i in range(0, len(body), 1500)]
+
+    for chunk in chunks:
+        client.messages.create(
+            from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
+            to=f"whatsapp:{to}",
+            body=chunk
+        )
