@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from pydantic import BaseModel
-from db import SessionLocal
+from database import SessionLocal
 from models import Message
 import os
 import uuid
@@ -36,7 +36,6 @@ class IncomingMessage(BaseModel):
 @router.post("/message")
 async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_db)):
 
-    # Try to get user, don't block if not found
     user = None
     try:
         result = await asyncio.wait_for(
@@ -47,7 +46,6 @@ async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_
     except Exception:
         pass
 
-    # Build prompt based on whether user exists or not
     if user:
         prompt = f"""You are Seek, a friendly health assistant created by 5 cracked developers.
 You ONLY answer questions related to health, food, drugs, nutrition or wellness.
@@ -78,7 +76,6 @@ Answer this: {data.message}
 At the end of your answer always add:
 Want to explore more? Visit us at {SEEK_WEB_URL}"""
 
-    # Handle token and saving only if user exists
     user_id = user["id"] if user else None
     chat_token = None
     is_new_user = False
@@ -102,7 +99,6 @@ Want to explore more? Visit us at {SEEK_WEB_URL}"""
         db.add(user_message)
         await db.commit()
 
-    # Call Gemini
     try:
         gemini_response = await asyncio.to_thread(model.generate_content, prompt)
         answer = gemini_response.text
@@ -110,7 +106,6 @@ Want to explore more? Visit us at {SEEK_WEB_URL}"""
         print("Gemini error:", e)
         raise HTTPException(status_code=500, detail="AI service failed")
 
-    # Save bot reply if user exists
     if user_id:
         bot_message = Message(
             user_id=user_id,
