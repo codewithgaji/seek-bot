@@ -226,9 +226,3 @@ End with: Want to explore more? Visit us at seekapp.com"""
 
     except Exception as e:
         print("Image test error:", str(e))
-        raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
-```
-
-Now in Swagger go to `/test/image` and paste any public image URL like:
-```
-https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg
