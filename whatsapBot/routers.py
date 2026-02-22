@@ -7,8 +7,11 @@ from models import Message
 import os
 import uuid
 import asyncio
+import base64
+import httpx
 from dotenv import load_dotenv
 import google.generativeai as genai
+from typing import Optional
 
 load_dotenv()
 
@@ -31,6 +34,9 @@ async def get_db():
 class IncomingMessage(BaseModel):
     phone: str
     message: str
+
+class ImageTest(BaseModel):
+    image_url: str  # paste any public image URL to test
 
 
 @router.post("/message")
@@ -180,3 +186,49 @@ Want to explore more? Visit us at {SEEK_WEB_URL}"""
         "you_sent": data.message,
         "seek_replied": answer
     }
+
+
+@router.post("/test/image")
+async def test_image(data: ImageTest):
+    try:
+        # Download image from the URL
+        async with httpx.AsyncClient(timeout=30) as client:
+            image_response = await client.get(data.image_url, follow_redirects=True)
+            image_bytes = image_response.content
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+
+        def _analyse():
+            image_part = {
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": image_b64
+                }
+            }
+            prompt = """You are Seek, a health assistant. Analyse this image of a food item or drug/medication.
+
+Identify what it is and provide:
+1. What the item is
+2. Key nutritional info or drug ingredients
+3. Potential risks or side effects
+4. A short health recommendation
+
+Keep your response concise and under 1000 characters.
+End with: Want to explore more? Visit us at seekapp.com"""
+
+            response = model.generate_content([prompt, image_part])
+            return response.text
+
+        answer = await asyncio.to_thread(_analyse)
+        return {
+            "image_url": data.image_url,
+            "analysis": answer
+        }
+
+    except Exception as e:
+        print("Image test error:", str(e))
+        raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
+```
+
+Now in Swagger go to `/test/image` and paste any public image URL like:
+```
+https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg/1200px-Cat03.jpg
