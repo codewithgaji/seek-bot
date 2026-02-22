@@ -16,7 +16,7 @@ load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 APP_URL = os.getenv("APP_URL", "http://localhost:8000")
-SEEK_WEB_URL = os.getenv("SEEK_WEB_URL", "https://seekapp.com")
+SEEK_WEB_URL = os.getenv("SEEK_WEB_URL", "https://seeek.vercel.app")
 
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY not found in environment") # Incase of no API KEY, so i can debug
