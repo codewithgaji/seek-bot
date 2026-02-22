@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 from pydantic import BaseModel
@@ -11,7 +11,6 @@ import base64
 import httpx
 from dotenv import load_dotenv
 import google.generativeai as genai
-from typing import Optional
 
 load_dotenv()
 
@@ -34,9 +33,6 @@ async def get_db():
 class IncomingMessage(BaseModel):
     phone: str
     message: str
-
-class ImageTest(BaseModel):
-    image_url: str  # paste any public image URL to test
 
 
 @router.post("/message")
@@ -189,18 +185,15 @@ Want to explore more? Visit us at {SEEK_WEB_URL}"""
 
 
 @router.post("/test/image")
-async def test_image(data: ImageTest):
+async def test_image(file: UploadFile = File(...)):
     try:
-        # Download image from the URL
-        async with httpx.AsyncClient(timeout=30) as client:
-            image_response = await client.get(data.image_url, follow_redirects=True)
-            image_bytes = image_response.content
-            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        image_bytes = await file.read()
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
         def _analyse():
             image_part = {
                 "inline_data": {
-                    "mime_type": "image/jpeg",
+                    "mime_type": file.content_type or "image/jpeg",
                     "data": image_b64
                 }
             }
@@ -220,9 +213,10 @@ End with: Want to explore more? Visit us at seekapp.com"""
 
         answer = await asyncio.to_thread(_analyse)
         return {
-            "image_url": data.image_url,
+            "filename": file.filename,
             "analysis": answer
         }
 
     except Exception as e:
         print("Image test error:", str(e))
+        raise HTTPException(status_code=500, detail=f"Image analysis failed: {str(e)}")
