@@ -50,7 +50,6 @@ async def receive_whatsapp_message(request: Request):
 
 async def analyse_image(media_url: str) -> str:
     try:
-        # Download the image from Twilio
         async with httpx.AsyncClient(timeout=30) as client:
             image_response = await client.get(
                 media_url,
@@ -59,18 +58,18 @@ async def analyse_image(media_url: str) -> str:
             image_bytes = image_response.content
             content_type = image_response.headers.get("content-type", "image/jpeg")
 
-        # Send image to your partner's API
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 SEEK_API,
                 files={"image": ("image.jpg", image_bytes, content_type)}
             )
             data = response.json()
+            print("Image API response:", data)  # <-- this shows exactly what comes back
 
         return format_image_response(data)
 
     except Exception as e:
-        print("Image analysis error:", e)
+        print("Image analysis error:", str(e))
         return "Sorry, I couldn't analyse that image. Please try again or type your question instead."
 
 
