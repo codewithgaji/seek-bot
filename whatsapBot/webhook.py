@@ -6,6 +6,7 @@ import os
 import asyncio
 import google.generativeai as genai
 from dotenv import load_dotenv
+from cloudinary_service import upload_twilio_image
 
 load_dotenv()
 
@@ -64,25 +65,33 @@ async def receive_whatsapp_message(request: Request):
 
 async def analyse_image_with_gemini(media_url: str) -> str:
     try:
+        import base64
+
+        # Upload to Cloudinary first to get a clean URL
+        clean_url = await upload_twilio_image(media_url)
+        print("Cloudinary URL:", clean_url)
+
+        # Download clean image from Cloudinary
         async with httpx.AsyncClient(timeout=30) as client:
-            image_response = await client.get(
-                media_url,
-                auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-            )
+            image_response = await client.get(clean_url, follow_redirects=True)
             image_bytes = image_response.content
-            content_type = "image/jpeg"
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
 
         def _analyse():
-            image_part = {"mime_type": content_type, "data": image_bytes}
+            image_part = {
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": image_b64
+                }
+            }
             prompt = """You are Seek, a health assistant. Analyse this image of a food item or drug/medication.
 
 Identify what it is and provide:
 1. What the item is
 2. Key nutritional info or drug ingredients
 3. Potential risks or side effects
-4. A short personalised health recommendation
+4. A short health recommendation
 
-Keep your response concise and under 1000 characters.
 End with: Want to explore more? Visit us at seekapp.com"""
 
             response = model.generate_content([prompt, image_part])
@@ -94,8 +103,8 @@ End with: Want to explore more? Visit us at seekapp.com"""
     except Exception as e:
         print("Image analysis error:", str(e))
         return "Sorry, I couldn't analyse that image. Please try again or type your question instead."
-
-
+    
+    
 def send_whatsapp_message(to: str, body: str):
     client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 
