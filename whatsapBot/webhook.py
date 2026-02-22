@@ -24,14 +24,12 @@ async def receive_whatsapp_message(request: Request):
     media_url = form.get("MediaUrl0")
     num_media = form.get("NumMedia", "0")
 
-    # If user sent an image
     if int(num_media) > 0 and media_url:
         send_whatsapp_message(phone, "🔍 Analysing your image, give me a second...")
         answer = await analyse_image_with_gemini(media_url)
         send_whatsapp_message(phone, answer)
         return PlainTextResponse("ok")
 
-    # Normal text message
     send_whatsapp_message(phone, "🔍 Looking that up for you...")
 
     try:
@@ -63,42 +61,20 @@ async def receive_whatsapp_message(request: Request):
 
     return PlainTextResponse("ok")
 
+
 async def analyse_image_with_gemini(media_url: str) -> str:
     try:
-        # Download image from Twilio
         async with httpx.AsyncClient(timeout=30) as client:
             image_response = await client.get(
                 media_url,
                 auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
             )
             image_bytes = image_response.content
-            # Force image/jpeg regardless of what Twilio returns as e get strong head
             content_type = "image/jpeg"
 
-        # Send image directly to Gemini
         def _analyse():
             image_part = {"mime_type": content_type, "data": image_bytes}
             prompt = """You are Seek, a health assistant. Analyse this image of a food item or drug/medication.
-
-
-Identify what it is and provide:
-1. What the item is
-2. Key nutritional info or drug ingredients
-3. Potential risks or side effects
-4. A short personalised health recommendation
-
-Keep your response concise and under 1000 characters.
-End with: Want to explore more? Visit us at seekapp.com"""
-
-            response = model.generate_content([prompt, image_part])
-            return response.text
-
-        answer = await asyncio.to_thread(_analyse)
-        return answer
-
-    except Exception as e:
-        print("Image analysis error:", str(e))
-        return "Sorry, I couldn't analyse that image. Please try again or type your question instead."
 
 Identify what it is and provide:
 1. What the item is
