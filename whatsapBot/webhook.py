@@ -98,7 +98,7 @@ Identify what it is and provide:
 4. A short health recommendation
 
 You can be friendly and engaging in your response.
-End with: Want to explore more? Visit us at seekapp.com"""
+End with: Want to explore more? Visit us at https://seeek.vercel.app"""
 
             response = model.generate_content([prompt, image_part])
             return response.text
