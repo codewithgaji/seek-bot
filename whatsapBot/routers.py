@@ -52,9 +52,8 @@ async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_
     user_id = user["id"] if user else None
     chat_token = None
     is_new_user = False
-
-    # Fetch last 5 messages for conversation history
     conversation_history = ""
+
     if user_id:
         token_result = await db.execute(
             select(Message.token).where(Message.user_id == user_id).limit(1)
@@ -70,9 +69,7 @@ async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_
             .order_by(Message.created_at.desc())
             .limit(5)
         )
-        history = history_result.scalars().all()
-        history = list(reversed(history))
-
+        history = list(reversed(history_result.scalars().all()))
         for msg in history:
             role = "User" if msg.role == "user" else "Seek"
             conversation_history += f"{role}: {msg.content}\n"
@@ -95,7 +92,7 @@ Here is what you know about this user:
 Previous conversation:
 {conversation_history}
 
-Now answer this new message: {data.message}
+Now answer this: {data.message}
 
 At the end of your answer always add:
 Want to explore more? Visit us at {SEEK_WEB_URL}"""
