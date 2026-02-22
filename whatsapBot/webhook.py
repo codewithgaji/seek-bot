@@ -3,10 +3,16 @@ from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
 import httpx
 import os
+import asyncio
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
+
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 router = APIRouter()
-
-SEEK_API = "https://seek-1-6el7.onrender.com/api/v1/imageScan"
 
 
 @router.post("/webhook")
@@ -21,35 +27,46 @@ async def receive_whatsapp_message(request: Request):
     # If user sent an image
     if int(num_media) > 0 and media_url:
         send_whatsapp_message(phone, "🔍 Analysing your image, give me a second...")
-        answer = await analyse_image(media_url)
+        answer = await analyse_image_with_gemini(media_url)
         send_whatsapp_message(phone, answer)
         return PlainTextResponse("ok")
 
     # Normal text message
     send_whatsapp_message(phone, "🔍 Looking that up for you...")
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{os.getenv('APP_URL')}/message",
-            json={"phone": phone, "message": text}
-        )
-        result = response.json()
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{os.getenv('APP_URL')}/message",
+                json={"phone": phone, "message": text}
+            )
+            result = response.json()
 
-    if "chat_link" in result:
-        send_whatsapp_message(phone,
-            "👋 Hello! Welcome to Seek!\n\nSeek was created by 5 cracked developers to help you with all your health, food and drug questions. I'm your personal health assistant and I'm here to help! 💊🥗"
-        )
+        if "answer" not in result:
+            print("Error from /message:", result)
+            send_whatsapp_message(phone, "Sorry, something went wrong. Please try again.")
+            return PlainTextResponse("ok")
 
-    send_whatsapp_message(phone, result["answer"])
+        if "chat_link" in result:
+            send_whatsapp_message(phone,
+                "👋 Hello! Welcome to Seek!\n\nSeek was created by 5 cracked developers to help you with all your health, food and drug questions. I'm your personal health assistant and I'm here to help! 💊🥗"
+            )
 
-    if "chat_link" in result:
-        send_whatsapp_message(phone, f"🔗 View your chat history here: {result['chat_link']}")
+        send_whatsapp_message(phone, result["answer"])
+
+        if "chat_link" in result:
+            send_whatsapp_message(phone, f"🔗 View your chat history here: {result['chat_link']}")
+
+    except Exception as e:
+        print("Webhook error:", str(e))
+        send_whatsapp_message(phone, "Sorry, something went wrong. Please try again.")
 
     return PlainTextResponse("ok")
 
 
-async def analyse_image(media_url: str) -> str:
+async def analyse_image_with_gemini(media_url: str) -> str:
     try:
+        # Download image from Twilio
         async with httpx.AsyncClient(timeout=30) as client:
             image_response = await client.get(
                 media_url,
@@ -58,52 +75,29 @@ async def analyse_image(media_url: str) -> str:
             image_bytes = image_response.content
             content_type = image_response.headers.get("content-type", "image/jpeg")
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                SEEK_API,
-                files={"image": ("image.jpg", image_bytes, content_type)}
-            )
-            data = response.json()
-            print("Image API response:", data)  # <-- this shows exactly what comes back
+        # Send image directly to Gemini
+        def _analyse():
+            image_part = {"mime_type": content_type, "data": image_bytes}
+            prompt = """You are Seek, a health assistant. Analyse this image of a food item or drug/medication.
 
-        return format_image_response(data)
+Identify what it is and provide:
+1. What the item is
+2. Key nutritional info or drug ingredients
+3. Potential risks or side effects
+4. A short personalised health recommendation
+
+Keep your response concise and under 1000 characters.
+End with: Want to explore more? Visit us at seekapp.com"""
+
+            response = model.generate_content([prompt, image_part])
+            return response.text
+
+        answer = await asyncio.to_thread(_analyse)
+        return answer
 
     except Exception as e:
         print("Image analysis error:", str(e))
         return "Sorry, I couldn't analyse that image. Please try again or type your question instead."
-
-
-def format_image_response(data: dict) -> str:
-    try:
-        r = data["response"]
-        item_type = r.get("item_type", "Item")
-        name = r.get("identified_name", "Unknown")
-
-        msg = f"🔎 *{item_type}: {name}*\n\n"
-
-        risks = r.get("risk_assessment", [])
-        if risks:
-            msg += "⚠️ *Risk Assessment:*\n"
-            for risk in risks:
-                severity = risk.get("severity", "")
-                effect = risk.get("ailment_or_side_effect", "")
-                trigger = risk.get("trigger", "")
-                msg += f"• {effect} ({trigger}) — {severity}\n"
-
-        recommendations = r.get("personalized_recommendations", [])
-        if recommendations:
-            msg += "\n💡 *Recommendations:*\n"
-            for rec in recommendations[:2]:  # limit to 2 to stay under char limit
-                issue = rec.get("original_issue", "")
-                suggestion = rec.get("suggestion", "")[:200]  # cap length
-                msg += f"• {issue}: {suggestion}...\n"
-
-        msg += f"\n\nWant to explore more? Visit us at {os.getenv('SEEK_WEB_URL', 'https://seekapp.com')}"
-        return msg
-
-    except Exception as e:
-        print("Format error:", e)
-        return "Received a response but couldn't format it. Please try again."
 
 
 def send_whatsapp_message(to: str, body: str):
