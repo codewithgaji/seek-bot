@@ -1,164 +1,128 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
-from pydantic import BaseModel
-from database import SessionLocal
-from models import Message
+from twilio.rest import Client
+from fastapi import APIRouter, Request
+from fastapi.responses import PlainTextResponse
+import httpx
 import os
-import uuid
-import asyncio
-from dotenv import load_dotenv
-import google.generativeai as genai
-
-load_dotenv()
-
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-APP_URL = os.getenv("APP_URL", "http://localhost:8000")
-SEEK_WEB_URL = os.getenv("SEEK_WEB_URL", "https://seekapp.com")
-
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found in environment")
-
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
 
 router = APIRouter()
 
-async def get_db():
-    async with SessionLocal() as session:
-        yield session
-
-class IncomingMessage(BaseModel):
-    phone: str
-    message: str
+SEEK_API = "https://seek-1-6el7.onrender.com/api/v1/imageScan"
 
 
-@router.post("/message")
-async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_db)):
+@router.post("/webhook")
+async def receive_whatsapp_message(request: Request):
+    form = await request.form()
 
-    # Look up user from the frontend's users table by phone number
-    result = await db.execute(
-        text("SELECT * FROM users WHERE phone_number = :phone"),
-        {"phone": data.phone}
-    )
-    user = result.mappings().first()
+    phone = form.get("From").replace("whatsapp:", "")
+    text = form.get("Body")
+    media_url = form.get("MediaUrl0")
+    num_media = form.get("NumMedia", "0")
 
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found. Please register on Seek first.")
+    # If user sent an image
+    if int(num_media) > 0 and media_url:
+        send_whatsapp_message(phone, "🔍 Analysing your image, give me a second...")
+        answer = await analyse_image(media_url)
+        send_whatsapp_message(phone, answer)
+        return PlainTextResponse("ok")
 
-    # Check if they already have a chat token in messages table
-    token_result = await db.execute(
-        select(Message.token).where(Message.user_id == user["id"]).limit(1)
-    )
-    existing_token = token_result.scalar_one_or_none()
-    is_new_user = existing_token is None
-    chat_token = existing_token if existing_token else uuid.uuid4()
+    # Normal text message
+    send_whatsapp_message(phone, "🔍 Looking that up for you...")
 
-    # Save the user's message
-    user_message = Message(
-        user_id=user["id"],
-        phone_number=data.phone,
-        token=chat_token,
-        role="user",
-        content=data.message
-    )
-    db.add(user_message)
-    await db.commit()
-
-    # Build personalised Gemini prompt using their real profile data
     try:
-        gemini_response = await asyncio.to_thread(
-            model.generate_content,
-            f"""You are Seek, a friendly health assistant that answers questions about food and drugs.
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                f"{os.getenv('APP_URL')}/message",
+                json={"phone": phone, "message": text}
+            )
+            result = response.json()
 
-You ONLY answer questions related to health, food, drugs, nutrition or wellness.
-If the user asks something unrelated, politely say you can only help with health topics and suggest they visit {SEEK_WEB_URL} for more.
+        if "answer" not in result:
+            print("Error from /message:", result)
+            send_whatsapp_message(phone, "Sorry, something went wrong. Please try again.")
+            return PlainTextResponse("ok")
 
-Here is what you know about this user:
-- Name: {user["firstName"]}
-- Age/DOB: {user["dateOfBirth"]}
-- Gender: {user["gender"]}
-- Diet type: {user["dietType"]}
-- Allergies: {user["allergies"]}
-- Health goals: {user["userGoals"]}
-- Height: {user["height"]}
-- Weight: {user["weight"]}
+        if "chat_link" in result:
+            send_whatsapp_message(phone,
+                "👋 Hello! Welcome to Seek!\n\nSeek was created by 5 cracked developers to help you with all your health, food and drug questions. I'm your personal health assistant and I'm here to help! 💊🥗"
+            )
 
-Use this information to give personalised answers. Answer this question: {data.message}
+        send_whatsapp_message(phone, result["answer"])
 
-At the end of your answer always add:
-Want to explore more? Visit us at {SEEK_WEB_URL}"""
+        if "chat_link" in result:
+            send_whatsapp_message(phone, f"🔗 View your chat history here: {result['chat_link']}")
+
+    except Exception as e:
+        print("Webhook error:", e)
+        send_whatsapp_message(phone, "Sorry, something went wrong. Please try again.")
+
+    return PlainTextResponse("ok")
+
+
+async def analyse_image(media_url: str) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            image_response = await client.get(
+                media_url,
+                auth=(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+            )
+            image_bytes = image_response.content
+            content_type = image_response.headers.get("content-type", "image/jpeg")
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                SEEK_API,
+                files={"image": ("image.jpg", image_bytes, content_type)}
+            )
+            data = response.json()
+
+        return format_image_response(data)
+
+    except Exception as e:
+        print("Image analysis error:", e)
+        return "Sorry, I couldn't analyse that image. Please try again or type your question instead."
+
+
+def format_image_response(data: dict) -> str:
+    try:
+        r = data["response"]
+        item_type = r.get("item_type", "Item")
+        name = r.get("identified_name", "Unknown")
+
+        msg = f"🔎 *{item_type}: {name}*\n\n"
+
+        risks = r.get("risk_assessment", [])
+        if risks:
+            msg += "⚠️ *Risk Assessment:*\n"
+            for risk in risks:
+                severity = risk.get("severity", "")
+                effect = risk.get("ailment_or_side_effect", "")
+                trigger = risk.get("trigger", "")
+                msg += f"• {effect} ({trigger}) — {severity}\n"
+
+        recommendations = r.get("personalized_recommendations", [])
+        if recommendations:
+            msg += "\n💡 *Recommendations:*\n"
+            for rec in recommendations[:2]:
+                issue = rec.get("original_issue", "")
+                suggestion = rec.get("suggestion", "")[:200]
+                msg += f"• {issue}: {suggestion}...\n"
+
+        msg += f"\n\nWant to explore more? Visit us at {os.getenv('SEEK_WEB_URL', 'https://seekapp.com')}"
+        return msg
+
+    except Exception as e:
+        print("Format error:", e)
+        return "Received a response but couldn't format it. Please try again."
+
+
+def send_whatsapp_message(to: str, body: str):
+    client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+
+    chunks = [body[i:i+1500] for i in range(0, len(body), 1500)]
+
+    for chunk in chunks:
+        client.messages.create(
+            from_=f"whatsapp:{os.getenv('TWILIO_PHONE_NUMBER')}",
+            to=f"whatsapp:{to}",
+            body=chunk
         )
-        answer = gemini_response.text
-    except Exception as e:
-        print("Gemini error:", e)
-        raise HTTPException(status_code=500, detail="AI service failed")
-
-    # Save the bot's reply
-    bot_message = Message(
-        user_id=user["id"],
-        phone_number=data.phone,
-        token=chat_token,
-        role="bot",
-        content=answer
-    )
-    db.add(bot_message)
-    await db.commit()
-
-    if is_new_user:
-        return {
-            "answer": answer,
-            "chat_link": f"{APP_URL}/chat/{chat_token}"
-        }
-
-    return {"answer": answer}
-
-
-@router.get("/chat/{token}")
-async def get_chat_history(token: str, db: AsyncSession = Depends(get_db)):
-
-    try:
-        user_uuid = uuid.UUID(token)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid token format")
-
-    result = await db.execute(
-        select(Message).where(Message.token == user_uuid).order_by(Message.created_at)
-    )
-    messages = result.scalars().all()
-
-    if not messages:
-        raise HTTPException(status_code=404, detail="Invalid token")
-
-    return {
-        "messages": [
-            {"role": m.role, "content": m.content, "time": m.created_at} for m in messages
-        ]
-    }
-
-
-@router.post("/test")
-async def test_bot(data: IncomingMessage):
-    try:
-        gemini_response = await asyncio.to_thread(
-            model.generate_content,
-            f"""You are Seek, a friendly health assistant that answers questions about food and drugs.
-
-You ONLY answer questions related to health, food, drugs, nutrition or wellness.
-Depending on how a person greets you, respond in a similar tone. If they are formal, be formal. If they are casual, be casual.
-If the user asks something unrelated, politely say you can only help with health topics.
-
-Answer this question: {data.message}
-
-At the end of your answer always add:
-Want to explore more? Visit us at {SEEK_WEB_URL}"""
-    )
-        answer = gemini_response.text
-    except Exception as e:
-        print("Gemini error:", e)
-        raise HTTPException(status_code=500, detail="AI service failed")
-
-    return {
-        "you_sent": data.message,
-        "seek_replied": answer
-    }
