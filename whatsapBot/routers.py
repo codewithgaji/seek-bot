@@ -19,7 +19,7 @@ APP_URL = os.getenv("APP_URL", "http://localhost:8000")
 SEEK_WEB_URL = os.getenv("SEEK_WEB_URL", "https://seekapp.com")
 
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found in environment")
+    raise ValueError("GEMINI_API_KEY not found in environment") # Incase of no API KEY, so i can debug
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel("gemini-2.5-flash")
@@ -28,11 +28,11 @@ router = APIRouter()
 
 async def get_db():
     async with SessionLocal() as session:
-        yield session
+        yield session # Providing a database session for the endpoints that need to interact with the database.
 
 class IncomingMessage(BaseModel):
     phone: str
-    message: str
+    message: str # I"m using this model to define the expected structure of incoming messages to the /message endpoint, which will be called from the webhook when a new message is received on WhatsApp.
 
 
 @router.post("/message")
@@ -41,13 +41,13 @@ async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_
     user = None
     try:
         result = await asyncio.wait_for(
-            db.execute(text("SELECT * FROM users WHERE phone_number = :phone"), {"phone": data.phone}),
+            db.execute(text("SELECT * FROM users WHERE phone_number = :phone"), {"phone": data.phone}), # accesing the users table to find a user with the matching phone number from the incoming message, so i can link the message to the correct user and maintain conversation history for that user.
             timeout=2
         )
         user = result.mappings().first()
         print("User found:", user["firstName"] if user else "No user found")
     except Exception as e:
-        print("User lookup error:", str(e))
+        print("User lookup error:", str(e)) # Debugging sake, railway needs it alot if i want to see the logs of the database queries and errors.
 
     user_id = user["id"] if user else None
     chat_token = None
@@ -57,7 +57,7 @@ async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_
     if user_id:
         token_result = await db.execute(
             select(Message.token).where(Message.user_id == user_id).limit(1)
-        )
+        ) # Verifying if there's an existing chat token for this user, which indicates they have an existing conversation history. If not, it means this is a new user and I will generate a new chat token for them.
         chat_token = token_result.scalar_one_or_none()
         is_new_user = chat_token is None
         if not chat_token:
@@ -102,6 +102,7 @@ You help people with questions about food, drugs, nutrition and wellness.
 Only answer health related questions.
 If asked something unrelated, politely say you can only help with health topics.
 
+Ensure your response is engaging, friendly, informative and not more than 3000 characters.
 Now answer this: {data.message}
 
 At the end of your answer always add:
@@ -147,7 +148,7 @@ Want to explore more? Visit us at {SEEK_WEB_URL}"""
     return {"answer": answer}
 
 
-@router.get("/chat/{token}")
+@router.get("/chat/{token}") # This endpoint is for the web app to retrieve the chat history for a user based on their unique chat token, which is generated when they first interact with the bot and stored in the database.
 async def get_chat_history(token: str, db: AsyncSession = Depends(get_db)):
 
     try:
@@ -170,7 +171,7 @@ async def get_chat_history(token: str, db: AsyncSession = Depends(get_db)):
     }
 
 
-@router.post("/test")
+@router.post("/test") # I'm testing with swagger the connection to Gemini and the response format, to make sure everything is working before i connect it to the webhook and start handling real user messages.
 async def test_bot(data: IncomingMessage):
     try:
         print("Calling Gemini for test...")
