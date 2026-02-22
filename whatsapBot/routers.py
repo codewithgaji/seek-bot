@@ -49,6 +49,34 @@ async def receive_message(data: IncomingMessage, db: AsyncSession = Depends(get_
     except Exception as e:
         print("User lookup error:", str(e))
 
+    user_id = user["id"] if user else None
+    chat_token = None
+    is_new_user = False
+
+    # Fetch last 5 messages for conversation history
+    conversation_history = ""
+    if user_id:
+        token_result = await db.execute(
+            select(Message.token).where(Message.user_id == user_id).limit(1)
+        )
+        chat_token = token_result.scalar_one_or_none()
+        is_new_user = chat_token is None
+        if not chat_token:
+            chat_token = uuid.uuid4()
+
+        history_result = await db.execute(
+            select(Message)
+            .where(Message.user_id == user_id)
+            .order_by(Message.created_at.desc())
+            .limit(5)
+        )
+        history = history_result.scalars().all()
+        history = list(reversed(history))
+
+        for msg in history:
+            role = "User" if msg.role == "user" else "Seek"
+            conversation_history += f"{role}: {msg.content}\n"
+
     if user:
         prompt = f"""You are Seek, a friendly health assistant created by 5 cracked developers.
 You ONLY answer questions related to health, food, drugs, nutrition or wellness.
@@ -64,9 +92,11 @@ Here is what you know about this user:
 - Height: {user["height"]}
 - Weight: {user["weight"]}
 
-Use this information to give personalised answers. Answer this: {data.message}
+Previous conversation:
+{conversation_history}
 
-Keep your answer concise and under 1000 characters.
+Now answer this new message: {data.message}
+
 At the end of your answer always add:
 Want to explore more? Visit us at {SEEK_WEB_URL}"""
     else:
@@ -75,25 +105,12 @@ You help people with questions about food, drugs, nutrition and wellness.
 Only answer health related questions.
 If asked something unrelated, politely say you can only help with health topics.
 
-Answer this: {data.message}
+Now answer this: {data.message}
 
-Keep your answer concise and under 1000 characters.
 At the end of your answer always add:
 Want to explore more? Visit us at {SEEK_WEB_URL}"""
 
-    user_id = user["id"] if user else None
-    chat_token = None
-    is_new_user = False
-
     if user_id:
-        token_result = await db.execute(
-            select(Message.token).where(Message.user_id == user_id).limit(1)
-        )
-        chat_token = token_result.scalar_one_or_none()
-        is_new_user = chat_token is None
-        if not chat_token:
-            chat_token = uuid.uuid4()
-
         user_message = Message(
             user_id=user_id,
             phone_number=data.phone,
@@ -168,7 +185,6 @@ If asked something unrelated, politely redirect them.
 
 Answer this: {data.message}
 
-Keep your answer concise and under 1000 characters.
 At the end always add:
 Want to explore more? Visit us at {SEEK_WEB_URL}"""
         )
@@ -205,7 +221,6 @@ Identify what it is and provide:
 3. Potential risks or side effects
 4. A short health recommendation
 
-Keep your response concise and under 1000 characters.
 End with: Want to explore more? Visit us at seekapp.com"""
 
             response = model.generate_content([prompt, image_part])
