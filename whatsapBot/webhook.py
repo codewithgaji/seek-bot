@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from twilio.rest import Client
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
@@ -39,8 +40,10 @@ async def receive_whatsapp_message(request: Request):
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 f"{os.getenv('APP_URL')}/message",
-                json={"phone": phone, "message": text} # I'm using this to connect to the user registered in the DB and to keep the conversation history for that user, which will be used for context in the Gemini analysis.
+                json={"phone": phone, "message": text}
             )
+            print("Status from /message:", response.status_code)
+            print("Response text:", response.text)
             result = response.json()
 
         if "answer" not in result:
